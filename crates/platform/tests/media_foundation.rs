@@ -16,8 +16,35 @@ use filmcraft_codecs::hw::NalStreamInfo;
 use filmcraft_platform::HybridDecoder;
 use filmcraft_platform::media_foundation::MfDecoder;
 
+struct HardwareDiagnostics;
+
+impl log::Log for HardwareDiagnostics {
+    fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+        metadata.target().starts_with("filmcraft_platform")
+    }
+
+    fn log(&self, record: &log::Record<'_>) {
+        if self.enabled(record.metadata()) {
+            eprintln!("{}: {}", record.target(), record.args());
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+fn hardware_diagnostics() {
+    static LOGGER: HardwareDiagnostics = HardwareDiagnostics;
+    static INIT: std::sync::Once = std::sync::Once::new();
+    INIT.call_once(|| {
+        if log::set_logger(&LOGGER).is_ok() {
+            log::set_max_level(log::LevelFilter::Info);
+        }
+    });
+}
+
 /// The hardware decoder for a stream, or `None` (skip) when this machine has none for it.
 fn hardware(s: &Stream) -> Option<Box<dyn VideoDecoder>> {
+    hardware_diagnostics();
     match filmcraft_platform::media_foundation_factory(&s.entry) {
         Some(Ok(d)) => {
             assert!(d.name().starts_with("Media Foundation"), "{}", d.name());

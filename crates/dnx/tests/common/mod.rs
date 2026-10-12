@@ -45,7 +45,9 @@ pub fn make(ff: &Path, spec: &Spec) -> PathBuf {
         let frames = spec.frames.to_string();
         let mut args = vec!["-f", "lavfi", "-i", spec.lavfi.as_str(), "-frames:v", frames.as_str(), "-c:v", "dnxhd"];
         args.extend(spec.enc.iter().copied());
-        args.extend(["-f", "mov"]);
+        // Bound UHD fixture memory independently of the host's CPU count.
+        // Keep every profile, frame and pixel comparison unchanged.
+        args.extend(["-threads:v", "2", "-f", "mov"]);
         let t = tmp.to_str().unwrap().to_string();
         args.push(&t);
         run(ff, &args);

@@ -1,5 +1,7 @@
 # Testing
 
+See [Quality checks](quality-checks.md) for the Linux/Windows PR gate and required oracle tools.
+
 ```sh
 cargo test --workspace                          # everything; oracle tests skip without ffmpeg
 cargo test -p filmcraft-h264                    # one crate

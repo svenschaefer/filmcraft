@@ -7,26 +7,31 @@ use std::sync::Arc;
 use filmcraft_media::FrameRequest;
 use filmcraft_time::{TICKS_PER_SECOND, Tick};
 
-fn ffmpeg() -> Option<&'static str> {
-    ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"].into_iter().find(|p| std::path::Path::new(p).exists())
+fn ffmpeg() -> Option<PathBuf> {
+    filmcraft_testkit::ffmpeg_or_skip("codecs unit fixtures")
+}
+
+fn fixture_dir() -> PathBuf {
+    filmcraft_testkit::fixtures_dir("codecs")
 }
 
 fn fixture(name: &str, args: &[&str]) -> Option<Arc<[u8]>> {
-    let ff = ffmpeg().or_else(|| {
-        eprintln!("ffmpeg not found; skipping");
-        None
-    })?;
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/fixtures/codecs");
-    std::fs::create_dir_all(&dir).ok()?;
-    let out = dir.join(name);
-    if !out.exists() {
-        let st = Command::new(ff).args(["-y", "-v", "error"]).args(args).arg(&out).status().ok()?;
-        if !st.success() {
-            eprintln!("fixture {name} failed; skipping");
-            return None;
+    let ff = ffmpeg()?;
+    let out = fixture_dir().join(name);
+    let generated = filmcraft_testkit::fixtures::generate(&out, |tmp| {
+        Command::new(&ff).args(["-y", "-v", "error"]).args(args).args(["-threads", "2"]).arg(tmp).status().is_ok_and(|s| s.success())
+    });
+    let Some(path) = generated else {
+        filmcraft_testkit::skip(name, "fixture generation failed");
+        return None;
+    };
+    match std::fs::read(&path) {
+        Ok(bytes) => Some(bytes.into()),
+        Err(error) => {
+            filmcraft_testkit::skip(name, &format!("read {}: {error}", path.display()));
+            None
         }
     }
-    Some(std::fs::read(out).ok()?.into())
 }
 
 #[test]
@@ -233,7 +238,7 @@ fn matroska_prores_pcm() {
 /// (`None` when ffmpeg or the encoder is unavailable).
 fn fixture_path(name: &str, args: &[&str]) -> Option<PathBuf> {
     fixture(name, args)?;
-    Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/fixtures/codecs").join(name))
+    Some(fixture_dir().join(name))
 }
 
 /// ffmpeg's decode of `src` as raw planar video (the oracle).
@@ -256,7 +261,7 @@ fn yuv_bytes(f: &filmcraft_frame::VideoFrame) -> Vec<u8> {
 /// Random access into a VP9 file: frames requested out of order (seeks back and forth across key
 /// frames, then sequential playback) are sample-exact against ffmpeg's decode.
 fn check_vp9_seeks(name: &str, container: &str, pix_fmt: &str, extra: &[&str], frames: usize) {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/fixtures/codecs");
+    let dir = fixture_dir();
     let log = dir.join(format!("{name}.passlog")).to_string_lossy().into_owned();
     let mut args = vec!["-f", "lavfi", "-i", "testsrc2=s=352x288:r=25,noise=alls=8:allf=t", "-frames:v"];
     let n = frames.to_string();
@@ -270,7 +275,7 @@ fn check_vp9_seeks(name: &str, container: &str, pix_fmt: &str, extra: &[&str], f
             let _ = std::fs::create_dir_all(&dir);
             let ok = Command::new(ff).args(["-y", "-v", "error"]).args(&args).args(["-pass", "1", "-passlogfile"]).arg(&log).args(["-f", "null", "-"]).status();
             if !ok.is_ok_and(|s| s.success()) {
-                eprintln!("first pass for {name} failed; skipping");
+                filmcraft_testkit::skip(name, "VP9 first-pass generation failed");
                 return;
             }
         }
@@ -521,20 +526,10 @@ fn mkv_vp9_rgb() {
 /// ffmpeg + libopus decode of a container fixture (pre-skip / codec delay / edit list applied) as
 /// interleaved f32 at 48 kHz: the reference for our Opus path.
 fn opus_reference(name: &str) -> Option<Vec<f32>> {
-    let ff = ffmpeg()?;
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/fixtures/codecs");
-    let out = dir.join(format!("{name}.ref.f32"));
-    let st = Command::new(ff)
-        .args(["-y", "-v", "error", "-c:a", "libopus", "-i"])
-        .arg(dir.join(name))
-        .args(["-f", "f32le", "-ar", "48000"])
-        .arg(&out)
-        .status()
-        .ok()?;
-    if !st.success() {
-        return None;
-    }
-    Some(std::fs::read(out).ok()?.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect())
+    let input = fixture_dir().join(name);
+    let input = input.to_string_lossy();
+    let bytes = fixture(&format!("{name}.ref.f32"), &["-c:a", "libopus", "-i", &input, "-f", "f32le", "-ar", "48000"])?;
+    Some(bytes.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect())
 }
 
 fn snr_db(reference: &[f32], test: &[f32]) -> f64 {
